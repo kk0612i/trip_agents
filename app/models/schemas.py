@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date as date_type, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -14,7 +14,7 @@ class TripRequest(BaseModel):
     origin: str | None = None
 
     # 出发日期，可选；没有日期时按“第 1 天、第 2 天”生成
-    start_date: date | None = None
+    start_date: date_type | None = None
 
     # 旅行天数，限制在 1 到 14 天之间
     days: int = Field(ge=1, le=14)
@@ -55,6 +55,15 @@ class TripChangeRequest(BaseModel):
 
     # 需要增加的限制，例如：每天 18 点前结束
     constraints_to_add: list[str] = Field(default_factory=list)
+
+
+class ParsedTripRequest(BaseModel):
+    """LLM 对用户消息解析后的结构化结果。"""
+
+    intent: Literal["create", "revise"]
+    trip_request: TripRequest | None = None
+    change_request: TripChangeRequest | None = None
+    missing_fields: list[str] = Field(default_factory=list)
 
 
 class PlaceCandidate(BaseModel):
@@ -132,7 +141,7 @@ class ItineraryDay(BaseModel):
     day_index: int
 
     # 实际日期；没有出发日期时可以为空
-    date: date | None = None
+    date: date_type | None = None
 
     # 当天安排的地点列表，顺序就是游玩顺序
     items: list[ItineraryItem]

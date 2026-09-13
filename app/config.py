@@ -1,8 +1,10 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PROJECT_DIR = Path(__file__).parent.parent
 
 class Settings(BaseSettings):
     """应用配置，环境变量优先于 .env 文件中的同名配置。"""
@@ -11,11 +13,13 @@ class Settings(BaseSettings):
     openai_base_url: str | None = None
     openai_model: str | None = None
 
+    database_url: str | None = None
+
     app_host: str = "127.0.0.1"
     app_port: int = Field(default=8000, ge=1, le=65535)
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=PROJECT_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )

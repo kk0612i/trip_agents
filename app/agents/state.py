@@ -17,7 +17,7 @@ class TripGraphState(TypedDict, total=False):
     run_id: str
 
     # 当前旅行编号；创建新旅行时可以为空
-    trip_id: str | None
+    trip_id: int | None
 
     # 用户本次发送的原始消息
     user_message: str
@@ -30,6 +30,9 @@ class TripGraphState(TypedDict, total=False):
 
     # 用户对已有行程的修改要求
     change_request: TripChangeRequest | None
+
+    # 解析需求后仍然缺少的必要信息
+    missing_fields: list[str]
 
     # 当前数据库中保存的行程版本号
     current_version_no: int | None

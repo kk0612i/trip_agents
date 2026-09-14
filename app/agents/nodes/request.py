@@ -10,9 +10,15 @@ async def parse_request(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],
 ) -> dict:
-    parsed = await runtime.context.llm.parse_request(
-        state["user_message"], state.get("current_itinerary")
-    )
+    try:
+        parsed = await runtime.context.llm.parse_request(
+            state["user_message"], state.get("current_itinerary")
+        )
+    # TODO 后续完成对应异常定义和捕获以及记录日志
+    except Exception as e:
+        return {
+            "error": str(e),
+        }
     return {
         "intent": parsed.intent,
         "trip_request": parsed.trip_request,
@@ -22,6 +28,7 @@ async def parse_request(
 
 
 def check_complete(state: TripGraphState) -> str:
+    """检查信息是否完整,不完整或错误则询问用户,完整则进入意图路由节点"""
     if state.get("error"):
         return "error"
     if state.get("missing_fields"):
@@ -32,6 +39,8 @@ def check_complete(state: TripGraphState) -> str:
 
 
 def route_intent(state: TripGraphState) -> str:
+    """意图路由节点,分别路由到创建旅行、修改旅行"""
+    # TODO 后续需新增 query 节点, 用于景点资料查询
     return "create" if state.get("intent") == "create" else "revise"
 
 

@@ -8,7 +8,9 @@ class TripRequest(BaseModel):
     """用户创建旅行时提交的需求。"""
 
     # 旅行目的地，例如：长沙
-    destination: str
+    # 需求解析阶段可能暂时缺少目的地；此时由 ParsedTripRequest.missing_fields
+    # 告知上游需要继续追问，真正生成行程前再校验该字段不能为空。
+    destination: str | None = None
 
     # 出发城市，可选；后续可以用于计算交通方案
     origin: str | None = None
@@ -17,7 +19,8 @@ class TripRequest(BaseModel):
     start_date: date_type | None = None
 
     # 旅行天数，限制在 1 到 14 天之间
-    days: int = Field(ge=1, le=14)
+    # 用户没有提供旅行天数时，解析器会返回 null 并记录到 missing_fields。
+    days: int | None = Field(default=None, ge=1, le=14)
 
     # 预算上限，单位为人民币；不填写表示暂不限制预算
     budget: float | None = Field(default=None, ge=0)

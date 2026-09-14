@@ -4,8 +4,10 @@ from langgraph.runtime import Runtime
 
 from app.agents.context import TripGraphContext
 from app.agents.state import TripGraphState
+from app.core.logger import node_log
 
 
+@node_log
 async def calculate_route(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],

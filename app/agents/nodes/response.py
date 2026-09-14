@@ -1,6 +1,8 @@
 from app.agents.state import TripGraphState
+from app.core.logger import node_log
 
 
+@node_log
 def compose_response(state: TripGraphState) -> dict:
     result = state["validation_result"]
     warnings = [i.message for i in result.issues if i.severity == "warning"]
@@ -10,6 +12,7 @@ def compose_response(state: TripGraphState) -> dict:
     return {"response": text}
 
 
+@node_log
 def compose_unresolved(state: TripGraphState) -> dict:
     errors = [
         issue.message

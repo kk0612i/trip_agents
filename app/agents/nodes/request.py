@@ -4,8 +4,10 @@ from langgraph.runtime import Runtime
 
 from app.agents.context import TripGraphContext
 from app.agents.state import TripGraphState
+from app.core.logger import node_log, logger
 
 
+@node_log
 async def parse_request(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],
@@ -14,8 +16,8 @@ async def parse_request(
         parsed = await runtime.context.llm.parse_request(
             state["user_message"], state.get("current_itinerary")
         )
-    # TODO 后续完成对应异常定义和捕获以及记录日志
     except Exception as e:
+        logger.exception("解析请求节点异常")
         return {
             "error": str(e),
         }
@@ -44,6 +46,7 @@ def route_intent(state: TripGraphState) -> str:
     return "create" if state.get("intent") == "create" else "revise"
 
 
+@node_log
 def route_intent_node(state: TripGraphState) -> dict:
     """流程图中的路由节点只触发条件边，不修改业务状态。"""
 
@@ -57,12 +60,14 @@ def check_new_places(state: TripGraphState) -> str:
     return "reuse"
 
 
+@node_log
 def check_new_places_node(state: TripGraphState) -> dict:
     """流程图中的判断节点只触发条件边，不修改业务状态。"""
 
     return {}
 
 
+@node_log
 def ask_user(state: TripGraphState) -> dict:
     if state.get("error"):
         return {"pending_question": None, "response": state["error"]}

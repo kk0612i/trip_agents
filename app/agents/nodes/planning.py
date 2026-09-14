@@ -4,8 +4,10 @@ from langgraph.runtime import Runtime
 
 from app.agents.context import TripGraphContext
 from app.agents.state import TripGraphState
+from app.core.logger import node_log
 
 
+@node_log
 async def search_places(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],
@@ -16,6 +18,7 @@ async def search_places(
     }
 
 
+@node_log
 async def search_places_for_revision(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],
@@ -27,6 +30,7 @@ async def search_places_for_revision(
     }
 
 
+@node_log
 async def build_itinerary(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],
@@ -39,6 +43,7 @@ async def build_itinerary(
     }
 
 
+@node_log
 async def revise_itinerary(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],

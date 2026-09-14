@@ -6,6 +6,7 @@ from langgraph.runtime import Runtime
 
 from app.agents.context import TripGraphContext
 from app.agents.state import TripGraphState
+from app.core.logger import node_log
 
 
 def _budget(state: TripGraphState) -> float | None:
@@ -14,6 +15,7 @@ def _budget(state: TripGraphState) -> float | None:
     return state.get("trip_request").budget if state.get("trip_request") else None
 
 
+@node_log
 def validate_itinerary(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],
@@ -35,6 +37,7 @@ def validation_router(state: TripGraphState) -> str:
     return "unresolved"
 
 
+@node_log
 async def repair_itinerary(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],

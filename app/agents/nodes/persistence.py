@@ -4,7 +4,7 @@ from langgraph.runtime import Runtime
 
 from app.agents.context import TripGraphContext
 from app.agents.state import TripGraphState
-from app.core.logger import node_log
+from app.core.logger import logger, node_log
 
 
 @node_log
@@ -20,4 +20,5 @@ async def save_version(
         state.get("route_info", []),
         state["validation_result"],
     )
+    logger.info("行程版本保存完成: trip_id={}, 版本={}", trip_id, version_no)
     return {"trip_id": trip_id, "saved_version_no": version_no}

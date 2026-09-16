@@ -17,7 +17,7 @@ async def parse_request(
             state["user_message"], state.get("current_itinerary")
         )
     except Exception as e:
-        logger.exception("解析请求节点异常")
+        logger.error("解析请求失败: 类型={}", type(e).__name__)
         return {
             "error": str(e),
         }
@@ -32,18 +32,23 @@ async def parse_request(
 def check_complete(state: TripGraphState) -> str:
     """检查信息是否完整,不完整或错误则询问用户,完整则进入意图路由节点"""
     if state.get("error"):
-        return "error"
-    if state.get("missing_fields"):
-        return "incomplete"
-    if state.get("intent") == "revise" and not state.get("current_itinerary"):
-        return "error"
-    return "complete"
+        decision = "error"
+    elif state.get("missing_fields"):
+        decision = "incomplete"
+    elif state.get("intent") == "revise" and not state.get("current_itinerary"):
+        decision = "error"
+    else:
+        decision = "complete"
+    logger.bind(run_id=state.get("run_id") or "-").info("需求完整性判断: {}", decision)
+    return decision
 
 
 def route_intent(state: TripGraphState) -> str:
     """意图路由节点,分别路由到创建旅行、修改旅行"""
     # TODO 后续需新增 query 节点, 用于景点资料查询
-    return "create" if state.get("intent") == "create" else "revise"
+    decision = "create" if state.get("intent") == "create" else "revise"
+    logger.bind(run_id=state.get("run_id") or "-").info("旅行意图路由: {}", decision)
+    return decision
 
 
 @node_log
@@ -55,9 +60,9 @@ def route_intent_node(state: TripGraphState) -> dict:
 
 def check_new_places(state: TripGraphState) -> str:
     change = state.get("change_request")
-    if change and change.add_place_keywords:
-        return "search"
-    return "reuse"
+    decision = "search" if change and change.add_place_keywords else "reuse"
+    logger.bind(run_id=state.get("run_id") or "-").info("新增地点判断: {}", decision)
+    return decision
 
 
 @node_log

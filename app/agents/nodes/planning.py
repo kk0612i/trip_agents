@@ -4,7 +4,7 @@ from langgraph.runtime import Runtime
 
 from app.agents.context import TripGraphContext
 from app.agents.state import TripGraphState
-from app.core.logger import node_log
+from app.core.logger import logger, node_log
 
 
 @node_log
@@ -13,9 +13,9 @@ async def search_places(
     runtime: Runtime[TripGraphContext],
 ) -> dict:
     request = state.get("trip_request") or state.get("change_request")
-    return {
-        "candidate_places": await runtime.context.amap.search_places(request),
-    }
+    candidates = await runtime.context.amap.search_places(request)
+    logger.info("候选地点搜索完成: 数量={}", len(candidates))
+    return {"candidate_places": candidates}
 
 
 @node_log
@@ -23,11 +23,9 @@ async def search_places_for_revision(
     state: TripGraphState,
     runtime: Runtime[TripGraphContext],
 ) -> dict:
-    return {
-        "candidate_places": await runtime.context.amap.search_places(
-            state["change_request"]
-        ),
-    }
+    candidates = await runtime.context.amap.search_places(state["change_request"])
+    logger.info("新增地点搜索完成: 数量={}", len(candidates))
+    return {"candidate_places": candidates}
 
 
 @node_log

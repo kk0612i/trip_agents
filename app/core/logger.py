@@ -17,7 +17,7 @@ import functools
 import inspect
 import time
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TypeVar, cast
 
 from loguru import logger as _logger
@@ -41,7 +41,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 LOG_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
     "<level>{level:<8}</level> | "
-    "{process.id}:{thread.id} | "
+    "{process.id}:{thread.id} | run_id={extra[run_id]} | "
     "{name}:{function}:{line} | {message}"
 )
 
@@ -70,6 +70,7 @@ def configure_logger(*, force: bool = False) -> None:
             # 仍由 get_settings() 对业务配置执行完整校验。
             settings = _fallback_settings()
         _logger.remove()
+        _logger.configure(extra={"run_id": "-"})
 
         if not settings.log_enabled:
             _CONFIGURED = True
@@ -166,49 +167,57 @@ def exception(message: str, *args: Any, **kwargs: Any) -> None:
 def node_log(func: F) -> F:
     """记录 LangGraph 节点的开始、结束耗时和异常。
 
-    同时支持同步/异步节点，并保留原函数签名。异常会先记录完整堆栈，
-    然后继续抛出给 LangGraph 或上层调用方处理，不改变原有错误语义。
+    同时支持同步/异步节点，并保留原函数签名。只记录异常类型，避免上游
+    异常链中的请求内容或密钥进入日志；异常仍交给上层处理。
     """
 
     node_name = func.__name__
+
+    def run_id_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+        state = args[0] if args else kwargs.get("state")
+        if isinstance(state, Mapping) and state.get("run_id"):
+            return str(state["run_id"])
+        return "-"
 
     if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             started_at = time.perf_counter()
-            logger.bind(node=node_name).info("节点开始: {}", node_name)
-            try:
-                result = await func(*args, **kwargs)
-            except Exception:
+            with logger.contextualize(run_id=run_id_from_call(args, kwargs)):
+                logger.info("节点开始: {}", node_name)
+                try:
+                    result = await func(*args, **kwargs)
+                except Exception as exc:
+                    elapsed = time.perf_counter() - started_at
+                    logger.error(
+                        "节点异常: {}, 类型={}, 耗时 {:.3f}s",
+                        node_name, type(exc).__name__, elapsed,
+                    )
+                    raise
                 elapsed = time.perf_counter() - started_at
-                logger.bind(node=node_name).exception(
-                    "节点异常: {}, 耗时 {:.3f}s", node_name, elapsed
-                )
-                raise
-            elapsed = time.perf_counter() - started_at
-            logger.bind(node=node_name).info(
-                "节点结束: {}, 耗时 {:.3f}s", node_name, elapsed
-            )
-            return result
+                logger.info("节点结束: {}, 耗时 {:.3f}s", node_name, elapsed)
+                return result
 
         return cast(F, async_wrapper)
 
     @functools.wraps(func)
     def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         started_at = time.perf_counter()
-        logger.bind(node=node_name).info("节点开始: {}", node_name)
-        try:
-            result = func(*args, **kwargs)
-        except Exception:
+        with logger.contextualize(run_id=run_id_from_call(args, kwargs)):
+            logger.info("节点开始: {}", node_name)
+            try:
+                result = func(*args, **kwargs)
+            except Exception as exc:
+                elapsed = time.perf_counter() - started_at
+                logger.error(
+                    "节点异常: {}, 类型={}, 耗时 {:.3f}s",
+                    node_name, type(exc).__name__, elapsed,
+                )
+                raise
             elapsed = time.perf_counter() - started_at
-            logger.bind(node=node_name).exception(
-                "节点异常: {}, 耗时 {:.3f}s", node_name, elapsed
-            )
-            raise
-        elapsed = time.perf_counter() - started_at
-        logger.bind(node=node_name).info("节点结束: {}, 耗时 {:.3f}s", node_name, elapsed)
-        return result
+            logger.info("节点结束: {}, 耗时 {:.3f}s", node_name, elapsed)
+            return result
 
     return cast(F, sync_wrapper)
 

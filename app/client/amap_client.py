@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -14,7 +15,7 @@ from typing import Any, Literal, Self
 
 import httpx
 
-from app.core.logger import logger
+from app.core.log import log_event
 
 AMAP_BASE_URL = "https://restapi.amap.com"
 AMAP_REQUESTS_PER_SECOND = 3
@@ -24,6 +25,7 @@ class AmapClientError(RuntimeError):
     """高德接口发生网络、协议或业务错误。"""
 
     def __init__(self, message: str, *, info_code: str | None = None) -> None:
+        """保存可展示说明和可选高德错误码，不保留 HTTP 响应对象。"""
         super().__init__(message)
         self.info_code = info_code
 
@@ -90,6 +92,19 @@ class AmapClient:
         max_retries: int = 2,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        """创建限流客户端，外部注入的 HTTP 客户端仍由调用方关闭。
+
+        Args:
+            api_key: 高德 Web 服务密钥，不写入日志和异常正文。
+            base_url: 高德服务地址，可注入本地离线测试端点。
+            timeout: 每次 HTTP 请求超时秒数，必须为正数。
+            requests_per_second: 当前客户端实例每秒允许发出的请求数。
+            max_retries: 可重试错误的额外重试次数，0 表示不重试。
+            http_client: 可选外部 HTTP 客户端；None 时创建并拥有客户端。
+
+        Raises:
+            ValueError: 密钥为空，或超时、限流、重试配置不合法。
+        """
         if not api_key or not api_key.strip():
             raise ValueError("高德 API Key 不能为空")
         if timeout <= 0:
@@ -100,17 +115,21 @@ class AmapClient:
         self._api_key = api_key.strip()
         self._base_url = base_url.rstrip("/")
         self._max_retries = max_retries
+        self._timeout = timeout
         self._rate_limiter = _SlidingWindowRateLimiter(
             requests_per_second,
             1.0,
         )
+        # 只释放本对象创建的连接池；注入客户端可由其他服务共享。
         self._owns_http_client = http_client is None
         self._http_client = http_client or httpx.AsyncClient(timeout=timeout)
 
     async def __aenter__(self) -> Self:
+        """进入客户端作用域，不重复创建连接池。"""
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
+        """退出作用域时只释放自有 HTTP 资源。"""
         await self.aclose()
 
     async def aclose(self) -> None:
@@ -127,7 +146,16 @@ class AmapClient:
         page: int = 1,
         offset: int = 10,
     ) -> dict[str, Any]:
-        """调用关键字搜索接口并返回高德原始响应。"""
+        """调用关键字搜索接口并返回高德原始响应。
+
+        Args:
+            keywords: 去除首尾空白后非空的搜索词。
+            city: 可选城市名或代码，提供时限制搜索城市。
+            page: 从 1 开始的结果页码。
+            offset: 每页结果上限，范围为 1 到 25。
+
+        Returns:
+            通过通用协议校验的原始 JSON，字段规范化由服务负责。"""
 
         keywords = keywords.strip()
         if not keywords:
@@ -155,7 +183,14 @@ class AmapClient:
         address: str,
         city: str | None = None,
     ) -> dict[str, Any]:
-        """调用地理编码接口并返回高德原始响应。"""
+        """调用地理编码接口并返回高德原始响应。
+
+        Args:
+            address: 非空地点地址或名称。
+            city: 可选城市范围。
+
+        Returns:
+            含 geocodes 的高德原始 JSON，不在客户端筛选业务地点。"""
 
         address = address.strip()
         if not address:
@@ -169,6 +204,49 @@ class AmapClient:
             },
         )
 
+    async def get_poi_detail(self, *, poi_id: str) -> dict[str, Any]:
+        """调用 POI 详情接口并返回高德原始响应。
+
+        Args:
+            poi_id: 非空高德 POI 编号。
+
+        Returns:
+            详情原始 JSON；扩展字段是否存在由上游决定。"""
+
+        poi_id = poi_id.strip()
+        if not poi_id:
+            raise ValueError("POI ID 不能为空")
+
+        return await self._request(
+            "/v3/place/detail",
+            {
+                "id": poi_id,
+                # 详情接口默认返回基础字段；扩展字段仅在高德实际提供时使用。
+                "extensions": "all",
+            },
+        )
+
+    async def get_weather(self, *, city: str) -> dict[str, Any]:
+        """调用天气查询接口并返回高德原始响应。
+
+        Args:
+            city: 非空城市名或行政区代码。
+
+        Returns:
+            预报原始 JSON，不补齐上游未提供的日期。"""
+
+        city = city.strip()
+        if not city:
+            raise ValueError("天气查询城市不能为空")
+
+        return await self._request(
+            "/v3/weather/weatherInfo",
+            {
+                "city": city,
+                "extensions": "all",
+            },
+        )
+
     async def calculate_route(
         self,
         *,
@@ -178,7 +256,13 @@ class AmapClient:
     ) -> dict[str, Any]:
         """调用步行或驾车路径规划接口并返回高德原始响应。
 
-        ``origin`` 和 ``destination`` 均使用高德要求的 ``经度,纬度`` 格式。
+        Args:
+            origin: 起点坐标，格式为经度,纬度。
+            destination: 终点坐标，格式为经度,纬度。
+            mode: 步行或驾车方式，不自动改变调用者选择。
+
+        Returns:
+            路线原始 JSON，距离单位为米、时长单位为秒。
         """
 
         origin = origin.strip()
@@ -212,56 +296,64 @@ class AmapClient:
 
         for attempt in range(self._max_retries + 1):
             await self._rate_limiter.acquire()
-            logger.debug("高德请求开始: 接口={}, 第 {} 次", path, attempt + 1)
+            started_at = time.perf_counter()
+            fields = {"operation": path, "attempt": attempt + 1, "timeout_seconds": self._timeout}
             try:
                 response = await self._http_client.get(
                     f"{self._base_url}{path}",
                     params=request_params,
+                    timeout=self._timeout,
                 )
             except httpx.RequestError as exc:
                 if attempt < self._max_retries:
-                    logger.warning("高德网络请求重试: 接口={}, 第 {} 次", path, attempt + 1)
+                    log_event("amap_retry", level="WARNING", **fields, status="retrying", error_type=type(exc).__name__,
+                              duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
                     await asyncio.sleep(0.25 * (2**attempt))
                     continue
-                logger.error("高德网络请求失败: 接口={}, 尝试次数={}", path, attempt + 1)
+                log_event("amap_completed", level="ERROR", **fields, status="failed", error_type=type(exc).__name__,
+                          duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
                 # 不拼接原始异常，避免异常中的完整 URL 泄露 API Key。
-                raise AmapClientError("请求高德地图失败，请检查网络连接") from exc
+                raise AmapClientError("请求高德地图失败，请检查网络连接") from None
 
             if (
                 response.status_code == 429 or response.status_code >= 500
             ) and attempt < self._max_retries:
-                logger.warning(
-                    "高德 HTTP 请求重试: 接口={}, 状态码={}, 第 {} 次",
-                    path, response.status_code, attempt + 1,
-                )
+                log_event("amap_retry", level="WARNING", **fields, status="retrying", status_code=response.status_code,
+                          duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
                 await asyncio.sleep(0.25 * (2**attempt))
                 continue
 
             if response.is_error:
-                logger.error("高德 HTTP 请求失败: 接口={}, 状态码={}", path, response.status_code)
+                log_event("amap_completed", level="ERROR", **fields, status="failed", status_code=response.status_code,
+                          error_type="HTTPStatusError", duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
                 raise AmapClientError(f"高德地图返回 HTTP {response.status_code}")
 
             try:
                 payload = response.json()
             except ValueError as exc:
-                logger.error("高德响应无法解析: 接口={}", path)
-                raise AmapClientError("高德地图返回了无法解析的 JSON") from exc
+                log_event("amap_completed", level="ERROR", **fields, status="failed", error_type=type(exc).__name__,
+                          duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
+                raise AmapClientError("高德地图返回了无法解析的 JSON") from None
 
             if not isinstance(payload, dict):
-                logger.error("高德响应格式错误: 接口={}", path)
+                log_event("amap_completed", level="ERROR", **fields, status="failed", error_type="InvalidPayload",
+                          duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
                 raise AmapClientError("高德地图返回的数据格式不正确")
 
             if str(payload.get("status")) != "1":
-                info = str(payload.get("info") or "未知错误")
-                info_code = str(payload.get("infocode") or "") or None
-                logger.error("高德业务请求失败: 接口={}, 错误码={}", path, info_code)
+                # 上游错误文本不可信，可能包含请求 URL 或密钥；只保留标准数字错误码。
+                raw_code = str(payload.get("infocode") or "")
+                info_code = raw_code if re.fullmatch(r"\d{5,6}", raw_code) else None
+                log_event("amap_completed", level="ERROR", **fields, status="failed", error_type="AmapBusinessError",
+                          info_code=info_code, duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
                 suffix = f"（错误码 {info_code}）" if info_code else ""
                 raise AmapClientError(
-                    f"高德地图请求失败：{info}{suffix}",
+                    f"高德地图请求失败{suffix}",
                     info_code=info_code,
                 )
 
-            logger.debug("高德请求完成: 接口={}, 第 {} 次", path, attempt + 1)
+            log_event("amap_completed", **fields, status="completed", status_code=response.status_code,
+                      duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
             return payload
 
         # 循环中的成功和失败分支都会返回或抛错，仅用于满足静态检查。

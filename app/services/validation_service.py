@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.models.schemas import Itinerary, RouteInfo, ValidationIssue, ValidationResult
+from app.schemas.trip_schema import Itinerary, RouteInfo, ValidationIssue, ValidationResult
 
 
 class ValidationService:
@@ -16,15 +16,32 @@ class ValidationService:
         routes: list[RouteInfo],
         budget: float | None,
     ) -> ValidationResult:
+        """在保存前检查行程金额、时间、路线及预算的一致性。
+
+        Args:
+            itinerary: 待检查的内部行程快照，金额单位人民币元。
+            routes: 与草稿对应的路线证据；距离单位公里、时长单位分钟。
+            budget: 全体出行人的整份行程预算，单位元；None 表示未提供上限。
+
+        Returns:
+            确定性校验结果；未知费用或约束违反时 passed 为 False。
+        """
         issues: list[ValidationIssue] = []
+        # 金额比较容差，单位人民币元；沿用既有浮点校验边界。
         money_epsilon = 0.01
 
         def issue(severity: str, code: str, message: str, day_index: int | None = None) -> None:
+            """追加结构化校验问题；day_index 为 None 时影响整份行程。"""
             issues.append(
                 ValidationIssue(
                     severity=severity, code=code, message=message, day_index=day_index
                 )
             )
+
+        # 工具和 POI 的未知费用以 None 传递；不能在保存校验中把它当作免费。
+        if any(item.estimated_cost is None for day in itinerary.days for item in day.items):
+            issue("error", "unknown_cost", "行程存在未知费用，尚不能确认完整总额或预算。")
+            return ValidationResult(passed=False, issues=issues, checked_at=datetime.now(timezone.utc))
 
         # 以项目明细为准检查每天及整份行程的金额汇总，避免 LLM 输出的汇总字段漂移。
         calculated_total = 0.0

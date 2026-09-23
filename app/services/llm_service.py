@@ -1,35 +1,22 @@
-"""LLM 能力的应用层接口。
-
-这里只定义工作流需要的输入输出，不在服务层放模型客户端或临时返回值。
-"""
+"""复用已注入的模型，提供需求解析和 Supervisor 结构化决策。"""
 
 from __future__ import annotations
 
 import time
 from typing import Any, TypeVar
 
+from langchain_core.runnables import Runnable
 from langchain_core.exceptions import OutputParserException
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
-from app.agents.prompts import (
-    BUILD_ITINERARY_SYSTEM_PROMPT,
-    BUILD_ITINERARY_USER_PROMPT,
-    PARSE_REQUEST_SYSTEM_PROMPT,
-    PARSE_REQUEST_USER_PROMPT,
-    REVISE_ITINERARY_SYSTEM_PROMPT,
-    REVISE_ITINERARY_USER_PROMPT,
-)
-from app.core.logger import logger
-from app.models.schemas import (
-    Itinerary,
-    ParsedTripRequest,
-    PlaceCandidate,
-    TripChangeRequest,
-    TripRequest,
-    ValidationResult,
-)
+from app.prompts.requirement_prompt import MINIMAL_PARSE_REQUEST_SYSTEM_PROMPT, MINIMAL_PARSE_REQUEST_USER_PROMPT
+from app.prompts.supervisor_prompt import SUPERVISOR_SYSTEM_PROMPT
+from app.core.log import log_event, safe_log_identifier
+from app.schemas.trip_schema import Itinerary, TripRequest
+from app.schemas.requirement_schema import MinimalParsedRequest
+from app.schemas.agent_schema import SupervisorDecision
 
 StructuredOutput = TypeVar("StructuredOutput", bound=BaseModel)
 
@@ -47,71 +34,54 @@ class LLMOutputParseError(LLMServiceError):
 
 
 class LLMService:
-    """封装请求解析、行程生成、修改和校验修复。"""
+    """封装需求解析和 Supervisor 决策的模型调用与输出校验。"""
 
-    def __init__(self, llm):
+    def __init__(self, llm: Runnable) -> None:
+        """接收调用方拥有的模型，不负责创建或关闭连接。"""
         self.llm = llm
 
-    async def parse_request(
+    async def parse_minimal_request(
         self,
         user_message: str,
-        current_itinerary: Itinerary | None,
-    ) -> ParsedTripRequest:
+        previous_request: TripRequest | None = None,
+        previous_intent: str | None = None,
+        *,
+        instruction: str = "",
+        current_itinerary: Itinerary | None = None,
+    ) -> MinimalParsedRequest:
+        """解析意图和需求补丁；由运行器合并并检查必填信息。"""
+
         return await self._invoke_structured(
-            output_type=ParsedTripRequest,
-            system_prompt=PARSE_REQUEST_SYSTEM_PROMPT,
-            user_prompt=PARSE_REQUEST_USER_PROMPT,
-            inputs={
-                "has_current_itinerary": current_itinerary is not None,
-                "current_itinerary": current_itinerary,
-                "user_message": user_message,
-            },
-            output_name="旅行请求",
-            operation="解析旅行请求",
+            output_type=MinimalParsedRequest,
+            system_prompt=MINIMAL_PARSE_REQUEST_SYSTEM_PROMPT,
+            user_prompt=MINIMAL_PARSE_REQUEST_USER_PROMPT,
+            inputs={"previous_request": previous_request.model_dump_json() if previous_request else "null",
+                    "previous_intent": previous_intent,
+                    "instruction": instruction,
+                    "current_itinerary": current_itinerary.model_dump_json() if current_itinerary else "null",
+                    "user_message": user_message},
+            output_name="最小切片旅行请求",
+            operation="解析最小切片旅行请求",
         )
 
-    async def build_itinerary(
+    async def supervisor_decide(
         self,
-        trip_request: TripRequest,
-        candidate_places: list[PlaceCandidate],
-    ) -> Itinerary:
-        return await self._invoke_structured(
-            output_type=Itinerary,
-            system_prompt=BUILD_ITINERARY_SYSTEM_PROMPT,
-            user_prompt=BUILD_ITINERARY_USER_PROMPT,
-            inputs={
-                "trip_request": trip_request,
-                "candidate_places": candidate_places,
-            },
-            output_name="行程",
-            operation="生成行程",
-        )
+        state: dict[str, Any],
+        agents: list[dict[str, Any]],
+    ) -> SupervisorDecision:
+        """让模型只生成经过 Pydantic 校验的下一步系统动作。"""
 
-    async def revise_itinerary(
-        self,
-        current_itinerary: Itinerary,
-        change_request: TripChangeRequest,
-        candidate_places: list[PlaceCandidate],
-    ) -> Itinerary:
         return await self._invoke_structured(
-            output_type=Itinerary,
-            system_prompt=REVISE_ITINERARY_SYSTEM_PROMPT,
-            user_prompt=REVISE_ITINERARY_USER_PROMPT,
-            inputs={
-                "current_itinerary": current_itinerary,
-                "change_request": change_request,
-                "candidate_places": candidate_places,
-            },
-            output_name="修改后行程",
-            operation="修改行程",
+            output_type=SupervisorDecision,
+            system_prompt=SUPERVISOR_SYSTEM_PROMPT,
+            user_prompt=(
+                "当前运行状态：{state}\n可用 Agent：{agents}\n"
+                "请只决定下一步动作。"
+            ),
+            inputs={"state": state, "agents": agents},
+            output_name="Supervisor 决策",
+            operation="生成 Supervisor 决策",
         )
-
-    async def repair_itinerary(
-        self,
-        draft_itinerary: Itinerary,
-        validation_result: ValidationResult,
-    ) -> Itinerary:
-        pass
 
     async def _invoke_structured(
         self,
@@ -130,22 +100,24 @@ class LLMService:
         chain = prompt | self.llm | parser
 
         started_at = time.perf_counter()
-        logger.info("LLM 操作开始: {}", operation)
+        # 这里只能观察一次应用调用；SDK 内部重试与 token 用量未知时不伪造数值。
+        fields = {"operation": operation, "model": safe_log_identifier(getattr(self.llm, "model_name", None)), "attempt": 1}
+        timeout = getattr(self.llm, "request_timeout", None)
+        if isinstance(timeout, (int, float)):
+            fields["timeout_seconds"] = timeout
+        log_event("llm_invocation_started", level="DEBUG", **fields, status="running")
         try:
             result = await chain.ainvoke(inputs)
         except OutputParserException as exc:
-            logger.warning(
-                "LLM 输出解析失败: {}, 耗时 {:.3f}s",
-                operation, time.perf_counter() - started_at,
-            )
+            log_event("llm_invocation_completed", level="WARNING", **fields, status="failed",
+                      error_type=type(exc).__name__, duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
             raise LLMOutputParseError(
                 f"LLM 返回的{output_name}格式不正确"
             ) from exc
         except Exception as exc:
-            logger.error(
-                "LLM 调用失败: {}, 类型={}, 耗时 {:.3f}s",
-                operation, type(exc).__name__, time.perf_counter() - started_at,
-            )
+            log_event("llm_invocation_completed", level="ERROR", **fields, status="failed",
+                      error_type=type(exc).__name__, duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
             raise LLMInvocationError(f"调用 LLM {operation}失败") from exc
-        logger.info("LLM 操作完成: {}, 耗时 {:.3f}s", operation, time.perf_counter() - started_at)
+        log_event("llm_invocation_completed", **fields, status="completed",
+                  duration_ms=round((time.perf_counter() - started_at) * 1000, 2))
         return result

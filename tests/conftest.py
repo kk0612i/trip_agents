@@ -4,6 +4,19 @@ import socket
 import ipaddress
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.core.resources import AppResources
+
+
+@pytest.fixture
+def offline_db_resources():
+    """提供未绑定引擎的真实会话工厂，供 HTTP 占位接口验证依赖生命周期。
+
+    Returns:
+        使用真实 AsyncSession 的资源容器；执行 SQL 会因未绑定引擎而失败。
+    """
+    return AppResources(session_factory=async_sessionmaker())
 
 
 @pytest.fixture(autouse=True)

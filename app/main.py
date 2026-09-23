@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.deps import get_auth_service
 from app.api.errors import register_error_handlers
 from app.api.middleware import register_request_context
 from app.api.auth_router import router as auth_router
@@ -14,8 +15,6 @@ from app.api.trip_router import router as trips_router
 from app.core.log import configure_logger, shutdown_logger, log_event
 from app.core.resources import AppResources
 from app.services.auth_service import AuthService
-from app.services.run_service import RunService
-from app.services.session_service import SessionService
 
 
 @asynccontextmanager
@@ -44,7 +43,8 @@ def create_app(*, resources: AppResources | None = None,
     Args:
         resources: 交由本应用关闭的资源容器；None 时创建独立容器。
             容器内由外部注入的对象仍归调用方管理。
-        auth_service: 调用方注入的认证服务；None 时创建持有当前应用延迟会话工厂的骨架。
+        auth_service: 测试用认证服务替身，通过依赖覆盖注入，不应传入绑定真实会话的共享服务。
+            None 时由 HTTP 依赖为每个请求创建独立认证服务。
 
     Returns:
         注册所有 V1 路由的 FastAPI 实例。
@@ -53,14 +53,9 @@ def create_app(*, resources: AppResources | None = None,
     application = FastAPI(title="Trip Agents API", version="1.0.0", lifespan=lifespan)
     # 应用生命周期管理的资源容器；仅首次使用具体资源时才创建连接。
     application.state.resources = resources if resources is not None else AppResources()
-    # 应用级认证依赖；默认只捕获会话工厂，避免启动或依赖注入时打开数据库连接。
-    application.state.auth_service = auth_service if auth_service is not None else AuthService(
-        lambda: application.state.resources.session_factory()
-    )
-    # 会话业务依赖；当前为占位服务，不保存实际会话数据。
-    application.state.session_service = SessionService()
-    # 运行管理依赖；当前为占位服务，不创建后台执行任务。
-    application.state.run_service = RunService()
+    # 真实服务由请求依赖创建，避免应用级实例共享数据库会话。
+    if auth_service is not None:
+        application.dependency_overrides[get_auth_service] = lambda: auth_service
 
     register_request_context(application)
     register_error_handlers(application)

@@ -33,8 +33,8 @@ def events(records, event):
     return [message.record["extra"] for message in records if message.record["extra"].get("event") == event]
 
 
-async def test_http_route_template_request_context_and_secrets(records):
-    app = create_app()
+async def test_http_route_template_request_context_and_secrets(records, offline_db_resources):
+    app = create_app(resources=offline_db_resources)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         responses = await asyncio.gather(
             client.get("/api/v1/runs/12345678-1234-1234-1234-123456789abc?token=secret-query"),
@@ -48,14 +48,15 @@ async def test_http_route_template_request_context_and_secrets(records):
     assert all(secret not in "".join(records) for secret in ("secret-query", "private-secret-path", "123456789abc"))
 
 
-async def test_auth_logs_unavailable_without_secrets(records):
+async def test_auth_logs_unavailable_without_secrets(records, offline_db_resources):
     """验证认证占位只记录能力不可用，不记录成功或泄露请求凭证。
 
     Args:
         records: 日志夹具收集的 Loguru 消息，包含文本及结构化事件字段。
+        offline_db_resources: 不连接真实数据库的请求级会话资源。
     """
     # 独立应用实例，避免其他测试的依赖状态影响认证日志。
-    app = create_app()
+    app = create_app(resources=offline_db_resources)
     # 仅用于脱敏断言的测试凭证，不应出现在日志中。
     body = {"email": "private@example.com", "password": "secret-password"}
     # 进程内客户端；覆盖注册和登录两个公开入口。

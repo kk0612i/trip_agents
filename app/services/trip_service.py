@@ -1,7 +1,9 @@
-"""旅行加载与保存边界；每次数据操作独立管理短会话。"""
+"""旅行加载与保存边界；借用外部会话，由服务管理短事务。"""
 
-from app.core.db import SessionFactory
 from time import perf_counter
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.log import log_event
 
 from app.schemas.api_schema import ItineraryVersion, Page, PageQuery, TripView, VersionSummary
@@ -15,24 +17,26 @@ from app.schemas.trip_schema import (
     ValidationResult,
 )
 
+
 class TripService:
     """提供旅行快照读取与待实现的版本保存入口。
 
-    仅接收外部注入的会话工厂，不持有请求级 Session。Runtime
-    调用本服务，权限、预算及草稿校验证明仍由 Agent 执行层管理。
+    会话由调用方创建和关闭，事务由本服务管理；不得跨并发任务共享。
+    Runtime 调用本服务，权限、预算及草稿校验证明仍由 Agent 执行层管理。
     """
 
-    def __init__(self, session_factory: SessionFactory) -> None:
-        """保存创建短会话的工厂，不连接数据库。
+    def __init__(self, session: AsyncSession) -> None:
+        """保存借用会话，并创建使用同一会话的旅行仓库。
 
         Args:
-            session_factory: 每次调用创建独立会话的异步上下文工厂。
+            session: 当前请求或工作单元的异步会话；调用前应无活动事务。
+                由调用方创建和关闭，同一服务上的数据库操作须顺序执行。
         """
-        # 每个业务工作单元单独借出、关闭会话；服务可以跨运行复用。
-        self.session_factory = session_factory
+        self.session = session
+        self.trip_repository = TripRepository(session)
 
     async def load_current(self, trip_id: int) -> tuple[int, Itinerary] | None:
-        """读取当前正式版本，并在退出会话前转换成内部行程模型。
+        """在独立事务内读取当前正式版本，转换成内部行程快照。
 
         Args:
             trip_id: 调用方确认访问范围后的旅行编号。本方法尚不提供 HTTP 鉴权。
@@ -45,10 +49,9 @@ class TripService:
             ValidationError: 已存储的行程 JSON 不符合内部 Schema。
         """
         started_at = perf_counter()
-        async with self.session_factory() as session:
-            # Repository 仅在本次读取中复用会话，不随模型推理保持存活。
-            trip_repo = TripRepository(session)
-            current = await trip_repo.load_current(trip_id)
+        # 正常退出提交、异常退出回滚，避免读取事务占用连接直到模型推理结束。
+        async with self.session.begin():
+            current = await self.trip_repository.load_current(trip_id)
         log_event("trip_load_completed", operation="load_current", status="completed" if current else "not_found",
                   duration_ms=round((perf_counter() - started_at) * 1000, 2))
         return current
@@ -62,7 +65,7 @@ class TripService:
         routes: list[RouteInfo],
         validation: ValidationResult,
     ) -> tuple[int, int]:
-        """声明版本保存接口；本阶段不创建会话、不执行写入。
+        """声明版本保存接口；本阶段不开启事务、不执行写入。
 
         Args:
             trip_id: 已有旅行编号；新旅行时为 None。
@@ -94,7 +97,7 @@ class TripService:
         raise CapabilityUnavailableError("旅行读取")
 
     async def list_versions(self, trip_id: str, query: PageQuery) -> Page[VersionSummary]:
-        """公开版本列表待实现；当前不创建会话或读取真实数据。
+        """公开版本列表待实现；当前不开启事务或读取真实数据。
 
         Args:
             trip_id: 旅行编号；公开入口使用正整数十进制字符串，内部读取使用整数。

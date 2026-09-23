@@ -69,7 +69,8 @@ class AgentRuntime:
             agent_registry: 专业任务注册表；None 时组装默认 Agent。
             tool_registry: 受控公共工具注册表；None 时组装默认工具。
             validator: 确定性校验器；None 时创建无资源校验服务。
-            trip_service: 旅行服务；由调用方管理工厂与资源，缺省时拒绝加载和保存。
+            trip_service: 本次运行独占的旅行服务；调用方管理会话关闭，服务管理事务。
+                缺省时拒绝加载和保存，不得跨并发运行共享。
             limits: 单轮调用上限；None 时使用默认预算。
         """
         self.supervisor = supervisor or RuleBasedSupervisorAgent()

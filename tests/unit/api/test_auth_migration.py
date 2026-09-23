@@ -1,12 +1,11 @@
 """认证数据库骨架的契约与无副作用验证。"""
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
 from app.core.errors import CapabilityUnavailableError
-from app.core.resources import AppResources
 from app.main import create_app
 from app.repository.auth_repository import UserRepository
 from app.schemas.auth_schema import Credentials
@@ -14,28 +13,16 @@ from app.services.auth_service import AuthService
 
 
 @pytest.fixture
-def application(monkeypatch):
-    """创建禁止访问数据库资源的认证测试应用。
+def application(offline_db_resources):
+    """创建使用请求级离线会话的认证测试应用。
 
     Args:
-        monkeypatch: pytest 提供的临时替换工具，测试结束后自动恢复资源属性。
+        offline_db_resources: 未绑定数据库引擎的会话资源，执行 SQL 会失败。
 
     Returns:
-        使用数据库访问哨兵的独立 FastAPI 应用。
+        可以创建会话但不执行 SQL 的独立 FastAPI 应用。
     """
-    def forbidden(*args, **kwargs):
-        """拦截数据库资源访问，使提前初始化依赖的行为直接导致测试失败。
-
-        Args:
-            args: 属性访问传入的实例等位置参数，不参与业务处理。
-            kwargs: 兼容替身调用的关键字参数，不参与业务处理。
-
-        Raises:
-            AssertionError: 数据库资源被访问时始终抛出。
-        """
-        raise AssertionError("认证骨架不得访问数据库资源")
-    monkeypatch.setattr(AppResources, "session_factory", property(forbidden))
-    return create_app()
+    return create_app(resources=offline_db_resources)
 
 
 @pytest.mark.parametrize("operation", ["register", "login"])
@@ -109,11 +96,11 @@ def test_credentials_preserve_password_and_normalize_email():
 
 async def test_token_placeholder_cannot_accept_identity():
     """验证认证占位方法不会把未经验证的令牌当作可信身份。"""
-    # 会话工厂哨兵；任何调用都表示占位服务提前打开了数据库会话。
-    factory = Mock(side_effect=AssertionError("不得打开数据库会话"))
+    # 会话哨兵；占位服务不得执行 SQL 或开启事务。
+    session = Mock()
     with pytest.raises(CapabilityUnavailableError):
-        await AuthService(factory).authenticate("unverified-token")
-    factory.assert_not_called()
+        await AuthService(session).authenticate("unverified-token")
+    assert session.mock_calls == []
 
 
 async def test_repository_placeholder_cannot_read_or_write():
@@ -122,11 +109,34 @@ async def test_repository_placeholder_cannot_read_or_write():
     session = Mock()
     # 持有会话替身的 Repository，测试其查询和写入边界。
     repository = UserRepository(session)
-    # 两个查询入口的待执行协程，都应以能力不可用结束，不产生用户结果。
-    for call in (repository.find_by_email("user@example.com"), repository.find_by_id("unknown")):
-        with pytest.raises(CapabilityUnavailableError):
-            await call
+    # 按编号读取与新增仍为占位；按邮箱查询已有实现，单独验证。
+    with pytest.raises(CapabilityUnavailableError):
+        await repository.find_by_id("unknown")
     from app.models.user import AppUser
     with pytest.raises(CapabilityUnavailableError):
         await repository.add(AppUser(id="unknown", email="user@example.com"))
     assert session.mock_calls == []
+
+
+@pytest.mark.parametrize("found", [False, True])
+async def test_email_lookup_filters_without_committing(found):
+    """按邮箱查询返回单个结果或空值，不提交、回滚或关闭借用的会话。
+
+    Args:
+        found: 模拟数据库是否存在对应邮箱的用户。
+    """
+    user = object() if found else None
+    result = Mock()
+    result.scalar_one_or_none.return_value = user
+    session = Mock()
+    session.execute = AsyncMock(return_value=result)
+
+    assert await UserRepository(session).find_by_email("user@example.com") is user
+
+    session.execute.assert_awaited_once()
+    statement = session.execute.await_args.args[0]
+    assert list(statement.compile().params.values()) == ["user@example.com"]
+    result.scalar_one_or_none.assert_called_once_with()
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+    session.close.assert_not_called()

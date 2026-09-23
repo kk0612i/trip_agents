@@ -1,24 +1,29 @@
 """数据库认证服务骨架；注册、登录和令牌校验尚未实现。"""
 
-from app.core.db import SessionFactory
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.errors import CapabilityUnavailableError
+from app.repository.auth_repository import UserRepository
 from app.schemas.auth_schema import AuthResponse, Credentials, UserView
 
 
 class AuthService:
-    """仅保存数据库会话工厂，不保存内存用户或随机签名密钥。"""
+    """使用请求级会话组织认证业务，事务由服务管理。
 
-    def __init__(self, session_factory: SessionFactory) -> None:
-        """保存延迟工厂，预留短事务及 UserRepository 的装配边界。
+    会话由调用方关闭；服务及仓库不得跨并发任务共享。
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        """保存借用会话，并创建使用同一会话的用户仓库。
 
         Args:
-            session_factory: 应用资源容器提供的会话工厂，每次调用创建独立工作单元。
+            session: 当前请求或工作单元的异步会话，由调用方创建和关闭。
         """
-        # 数据库会话的创建入口；只保存工厂，避免共享活动会话或构造时连接数据库。
-        self.session_factory = session_factory
+        self.session = session
+        self.user_repo = UserRepository(session)
 
     async def register(self, credentials: Credentials) -> AuthResponse:
-        """预留注册业务；当前不打开数据库会话、不写入用户或签发令牌。
+        """预留注册业务；当前不开启事务、不写入用户或签发令牌。
 
         Args:
             credentials: 已通过公开契约校验的注册凭证；邮箱已规范化，密码保留空白。

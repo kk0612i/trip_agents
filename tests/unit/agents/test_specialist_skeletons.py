@@ -1,11 +1,11 @@
 """主管服务边界与未实现专业能力的离线契约回归。"""
 
-from contextlib import asynccontextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.accommodation import AccommodationSearchAgent
 from app.agent.place_knowledge import PlaceKnowledgeAgent
@@ -47,34 +47,28 @@ async def test_named_specialists_keep_unimplemented_contract(agent_type, name, a
     assert state == before
 
 
-async def test_graph_closes_service_session_before_supervisor_runs():
-    """使用真实 TripService 接线，证明进入决策阶段时查询短会话已结束。"""
-    session = AsyncMock()
+async def test_graph_finishes_service_transaction_before_supervisor_runs():
+    """进入模型决策前结束读取事务，会话由图调用方负责关闭。"""
+    session = AsyncSession()
+    session.scalar = AsyncMock()
     session.scalar.return_value = SimpleNamespace(current_version=SimpleNamespace(
         version_no=3,
         itinerary_json={"summary": "已保存的长沙行程", "days": [], "total_cost": 0},
     ))
-    service_events = []
-
-    @asynccontextmanager
-    async def session_factory():
-        service_events.append("open")
-        try:
-            yield session
-        finally:
-            await session.close()
-            service_events.append("close")
+    session.close = AsyncMock(wraps=session.close)
 
     class CheckingSupervisor:
         async def decide(self, state):
-            assert service_events == ["open", "close"]
+            assert not session.in_transaction()
+            session.close.assert_not_awaited()
             assert state["current_version_no"] == 3
             assert state["current_itinerary"].summary == "已保存的长沙行程"
             return SupervisorDecision(action="ask_user", instruction="请补充调整要求")
 
-    result = await build_autonomous_graph(
-        trip_service=TripService(session_factory), supervisor=CheckingSupervisor(),
-    ).ainvoke({"trip_id": 12, "user_message": "修改行程"})
+    async with session:
+        result = await build_autonomous_graph(
+            trip_service=TripService(session), supervisor=CheckingSupervisor(),
+        ).ainvoke({"trip_id": 12, "user_message": "修改行程"})
 
     assert result["status"] == "needs_input"
     assert "trip_service" not in result
@@ -83,8 +77,8 @@ async def test_graph_closes_service_session_before_supervisor_runs():
 
 async def test_real_save_placeholder_fails_without_opening_database_session():
     """保存实际服务占位被执行层记录为失败，不产生版本或打开数据库。"""
-    factory = Mock(side_effect=AssertionError("保存占位不得创建数据库会话"))
-    service = TripService(factory)
+    session = Mock()
+    service = TripService(session)
     supervisor = FakeSupervisorAgent([
         {"action": "validate", "reason": "检查草稿"},
         {"action": "save", "reason": "保存已校验草稿"},
@@ -108,4 +102,4 @@ async def test_real_save_placeholder_fails_without_opening_database_session():
     assert result["saved_fingerprint"] is None
     assert "CapabilityUnavailableError" in result["error"]
     assert [step["action"] for step in result["steps"]] == ["validate", "save"]
-    factory.assert_not_called()
+    assert session.mock_calls == []

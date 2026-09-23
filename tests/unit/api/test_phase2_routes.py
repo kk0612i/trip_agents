@@ -12,13 +12,12 @@ RID = "550e8400-e29b-41d4-a716-446655440001"
 
 
 @pytest.fixture
-def application(monkeypatch):
+def application(monkeypatch, offline_db_resources):
     def forbidden(*args, **kwargs):
         raise AssertionError("占位 API 不得初始化外部资源")
-    monkeypatch.setattr(AppResources, "session_factory", property(forbidden))
     monkeypatch.setattr(AppResources, "llm", property(forbidden))
     monkeypatch.setattr(AppResources, "amap_client", property(forbidden))
-    return create_app()
+    return create_app(resources=offline_db_resources)
 
 
 @pytest.mark.parametrize("method,path,payload", [
@@ -33,7 +32,7 @@ def application(monkeypatch):
     ("GET", "/trips/42/versions", None),
     ("GET", "/trips/42/versions/1", None),
 ])
-async def test_all_placeholders_are_501_without_opening_resources(application, method, path, payload):
+async def test_all_placeholders_are_501_without_executing_sql(application, method, path, payload):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
         response = await client.request(method, "/api/v1" + path, json=payload)
     assert response.status_code == 501

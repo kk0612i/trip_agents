@@ -43,7 +43,8 @@ def build_autonomous_graph(
         supervisor: 显式主管决策器，覆盖默认 Context 中同名字段。
         agent_registry: 显式专业 Agent 注册表。
         tool_registry: 显式受控公共工具注册表。
-        trip_service: 显式旅行服务，通过短会话执行加载，保存仍为占位。
+        trip_service: 本次运行独占的旅行服务，通过短事务执行加载，保存仍为占位。
+            并发调用同一图时，应通过各自的 context 注入独立服务和会话。
         limits: 每轮执行预算；None 时使用默认上限。
 
     Returns:

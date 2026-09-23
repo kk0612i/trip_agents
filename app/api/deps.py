@@ -1,9 +1,9 @@
-"""HTTP 依赖适配；占位接口不触发模型或数据库资源初始化。"""
+"""HTTP 依赖适配；按请求创建数据库会话和服务，事务由服务管理。"""
 
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Header, Query, Request
+from fastapi import Depends, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +29,7 @@ def get_resources(request: Request) -> AppResources:
 
 
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
-    """借用独立短会话；提交由业务工作单元负责，退出时关闭。
+    """创建请求级会话；服务负责事务，依赖清理时关闭会话。
 
     Args:
         request: 当前 HTTP 请求，用于取得应用实例拥有的依赖。
@@ -41,52 +41,60 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
-def get_auth_service(request: Request) -> AuthService:
-    """取得当前应用的数据库认证骨架，不打开数据库会话。
+def get_auth_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> AuthService:
+    """创建当前请求的认证服务，并注入数据库会话。
 
     Args:
-        request: 当前 HTTP 请求，用于取得应用实例拥有的依赖。
+        session: get_db 提供的请求级会话，关闭由依赖清理负责。
 
     Returns:
-        持有延迟数据库会话工厂的认证服务骨架。
+        持有当前会话及用户仓库的认证服务。
     """
-    return request.app.state.auth_service
+    return AuthService(session)
 
 
-def get_session_service(request: Request) -> SessionService:
-    """取得会话骨架服务；正式身份依赖仍待接入。
+def get_session_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> SessionService:
+    """创建当前请求的对话服务，并注入数据库会话。
 
     Args:
-        request: 当前 HTTP 请求，用于取得应用实例拥有的依赖。
+        session: get_db 提供的请求级会话，关闭由依赖清理负责。
 
     Returns:
-        尚未接入真实会话数据的业务骨架。
+        持有当前会话及对话仓库的业务服务。
     """
-    return request.app.state.session_service
+    return SessionService(session)
 
 
-def get_run_service(request: Request) -> RunService:
-    """取得运行骨架服务，不创建后台任务。
+def get_run_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> RunService:
+    """创建当前请求的运行服务，并注入数据库会话。
 
     Args:
-        request: 当前 HTTP 请求，用于取得应用实例拥有的依赖。
+        session: get_db 提供的请求级会话，关闭由依赖清理负责。
 
     Returns:
-        尚未接入调度、存储及事件推送的业务骨架。
+        持有当前会话及运行仓库的业务服务。
     """
-    return request.app.state.run_service
+    return RunService(session)
 
 
-def get_trip_service(request: Request) -> TripService:
-    """只传递延迟会话工厂；公开占位方法不访问数据库。
+def get_trip_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> TripService:
+    """创建当前请求的旅行服务，并注入数据库会话。
 
     Args:
-        request: 当前 HTTP 请求，用于取得应用实例拥有的依赖。
+        session: get_db 提供的请求级会话，关闭由依赖清理负责。
 
     Returns:
-        只捕获会话工厂的旅行服务，不持有活动 Session。
+        持有当前会话及旅行仓库的业务服务。
     """
-    return TripService(lambda: get_resources(request).session_factory())
+    return TripService(session)
 
 
 def page_query(

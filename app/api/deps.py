@@ -5,11 +5,15 @@ from typing import Annotated
 
 from fastapi import Depends, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.resources import AppResources
+from app.core.config import get_settings
+from app.core.errors import AuthenticationFailedError
 from app.schemas.api_schema import PageQuery, UUIDString
+from app.schemas.auth_schema import UserView
 from app.services.auth_service import AuthService
 from app.services.run_service import RunService
 from app.services.session_service import SessionService
@@ -66,7 +70,7 @@ def get_session_service(
     Returns:
         持有当前会话及对话仓库的业务服务。
     """
-    return SessionService(session)
+    return SessionService(session, cursor_secret=get_settings().auth_jwt_secret)
 
 
 def get_run_service(
@@ -144,3 +148,28 @@ def event_cursor(
             "msg": "事件编号必须为当前运行 UUID:正整数序号", "input": last_event_id,
         }]) from exc
     return last_event_id
+
+
+bearer = HTTPBearer(auto_error=False)
+
+
+async def get_current_user(
+    request: Request,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(bearer),
+    ],
+) -> UserView:
+    if credentials is None:
+        raise AuthenticationFailedError()
+
+    # 认证使用独立会话，不与后续业务操作共享事务。
+    async with get_resources(request).session_factory() as session:
+        service = AuthService(session)
+        user = await service.authenticate(credentials.credentials)
+
+    # 此时认证会话已关闭；返回的是 UserView，不依赖数据库会话。
+    return user
+
+
+CurrentUserDep = Annotated[UserView, Depends(get_current_user)]

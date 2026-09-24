@@ -5,7 +5,9 @@ import httpx
 import pytest
 
 from app.core.resources import AppResources
+from app.api.deps import get_current_user
 from app.main import create_app
+from app.schemas.api_schema import UserView
 
 SID = "550e8400-e29b-41d4-a716-446655440000"
 RID = "550e8400-e29b-41d4-a716-446655440001"
@@ -17,12 +19,13 @@ def application(monkeypatch, offline_db_resources):
         raise AssertionError("占位 API 不得初始化外部资源")
     monkeypatch.setattr(AppResources, "llm", property(forbidden))
     monkeypatch.setattr(AppResources, "amap_client", property(forbidden))
-    return create_app(resources=offline_db_resources)
+    application = create_app(resources=offline_db_resources)
+    # 占位行为测试注入可信身份；会话列表及未登录行为由专门测试覆盖。
+    application.dependency_overrides[get_current_user] = lambda: UserView(id=SID, email="test@example.com")
+    return application
 
 
 @pytest.mark.parametrize("method,path,payload", [
-    ("POST", "/sessions", {}),
-    ("GET", "/sessions?limit=20", None),
     ("GET", f"/sessions/{SID}", None),
     ("POST", f"/sessions/{SID}/runs", {"client_request_id": RID, "message": "去长沙"}),
     ("GET", f"/sessions/{SID}/runs", None),
@@ -104,6 +107,8 @@ def test_openapi_contains_contract_routes_and_sse_error(application):
     assert set(paths) == set(expected)
     for path, methods in expected.items():
         assert set(paths[path]) == methods
-        if "/auth/" not in path:
+        # 会话接口正逐步接入，不再统一声明 501；运行和旅行仍为占位。
+        if path.startswith(("/api/v1/runs", "/api/v1/trips")):
             for method in methods:
                 assert "501" in paths[path][method]["responses"]
+    assert {"201", "401", "404", "409"} <= set(paths["/api/v1/sessions"]["post"]["responses"])

@@ -4,7 +4,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.errors import CapabilityUnavailableError, EmailAlreadyRegisteredError, AccountNotFoundError, \
-    InvalidPasswordError, AuthenticationFailedError, BusinessError
+    InvalidPasswordError, AuthenticationFailedError, BusinessError, InvalidCursorError, \
+    TripNotFoundError, TripHasNoVersionError
 from app.core.log import log_event
 from app.schemas.api_schema import ErrorResponse, PublicError
 
@@ -66,6 +67,12 @@ def register_error_handlers(application: FastAPI) -> None:
             status, code, message = 401, "INVALID_CREDENTIALS", "邮箱或密码错误"
         elif isinstance(exc, AuthenticationFailedError):
             status, code, message = 401, "UNAUTHENTICATED", "身份认证失败"
+        elif isinstance(exc, InvalidCursorError):
+            status, code, message = 422, "INVALID_ARGUMENT", "分页游标不合法"
+        elif isinstance(exc, TripNotFoundError):
+            status, code, message = 404, "TRIP_NOT_FOUND", "旅行不存在"
+        elif isinstance(exc, TripHasNoVersionError):
+            status, code, message = 409, "TRIP_HAS_NO_VERSION", "旅行没有当前版本"
         else:
             status, code, message = 500, "INTERNAL_ERROR", "服务暂时不可用"
 

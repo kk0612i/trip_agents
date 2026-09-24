@@ -117,6 +117,10 @@ class AuthService:
         if not user_id:
             raise AuthenticationFailedError()
         user = await self.user_repo.find_by_id(user_id)
+
+        if user is None:
+            raise AuthenticationFailedError()
+
         return UserView(
             id=user_id,
             email=user.email

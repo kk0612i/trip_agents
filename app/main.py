@@ -4,9 +4,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 
-from app.api.deps import get_auth_service
+from app.api.deps import get_auth_service, get_current_user
 from app.api.errors import register_error_handlers
 from app.api.middleware import register_request_context
 from app.api.auth_router import router as auth_router
@@ -61,10 +61,32 @@ def create_app(*, resources: AppResources | None = None,
     register_request_context(application)
     register_error_handlers(application)
 
-    application.include_router(sessions_router, prefix="/api/v1/sessions", tags=["sessions"])
-    application.include_router(runs_router, prefix="/api/v1/runs", tags=["runs"])
-    application.include_router(trips_router, prefix="/api/v1/trips", tags=["trips"])
-    application.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    protected = [Depends(get_current_user)]
+    application.include_router(
+        sessions_router,
+        prefix="/api/v1/sessions",
+        tags=["sessions"],
+        dependencies=protected,
+    )
+    application.include_router(
+        runs_router,
+        prefix="/api/v1/runs",
+        tags=["runs"],
+        dependencies=protected,
+    )
+    application.include_router(
+        trips_router,
+        prefix="/api/v1/trips",
+        tags=["trips"],
+        dependencies=protected,
+    )
+
+    # 注册、登录保持公开。
+    application.include_router(
+        auth_router,
+        prefix="/api/v1/auth",
+        tags=["auth"],
+    )
     return application
 
 

@@ -21,6 +21,18 @@ class BusinessError(Exception):
     """预期内的业务失败。"""
 
 
+class InvalidCursorError(BusinessError):
+    """分页游标格式、签名或所属用户及资源不合法。"""
+
+
+class TripNotFoundError(BusinessError):
+    """旅行不存在或不属于当前用户。"""
+
+
+class TripHasNoVersionError(BusinessError):
+    """旅行没有可用的当前正式版本，无法创建关联会话。"""
+
+
 class EmailAlreadyRegisteredError(BusinessError):
     pass
 

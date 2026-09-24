@@ -19,7 +19,7 @@ class UserRepository:
         self.session = session
 
     async def find_by_email(self, email: str) -> AppUser | None:
-        """预留按规范化邮箱读取用户的数据库查询。
+        """按规范化邮箱读取用户的数据库查询。
 
         Args:
             email: 已去除首尾空白并转为小写的邮箱，由认证服务提供。
@@ -34,29 +34,24 @@ class UserRepository:
         return result.scalar_one_or_none()
 
     async def find_by_id(self, user_id: str) -> AppUser | None:
-        """预留令牌校验后按用户编号读取账号的查询。
+        """令牌校验后按用户编号读取账号的查询。
 
         Args:
             user_id: 由服务端验证令牌后取得的用户 UUID，对应用户表主键。
 
         Returns:
-            实现后返回用户实体，未找到时返回 None；当前占位实现不会返回。
-
-        Raises:
-            CapabilityUnavailableError: 用户查询尚未实现，当前始终抛出。
+            返回用户实体，未找到时返回 None；
         """
-        raise CapabilityUnavailableError("用户查询")
+        return await self.session.get(AppUser, user_id)
 
     async def add(self, user: AppUser) -> None:
-        """预留用户写入；事务提交由上层工作单元负责。
+        """用户写入；事务提交由上层工作单元负责。
 
         Args:
             user: 认证服务构建的用户实体，包含 UUID、规范化邮箱、密码盐及摘要。
 
         Returns:
-            实现后返回 None，表示不返回额外结果，不代表事务已经提交；当前不会返回。
-
-        Raises:
-            CapabilityUnavailableError: 用户写入尚未实现，当前始终抛出。
+            返回 None，表示不返回额外结果，不代表事务已经提交；当前不会返回。
         """
-        raise CapabilityUnavailableError("用户写入")
+        self.session.add(user)
+

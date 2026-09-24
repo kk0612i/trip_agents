@@ -9,8 +9,8 @@ from app.schemas.api_schema import ErrorResponse
 from app.schemas.auth_schema import AuthResponse, Credentials
 from app.services.auth_service import AuthService
 
-# 注册登录路由集合；501 文档对应服务占位异常，由统一错误处理器生成响应。
-router = APIRouter(responses={501: {"model": ErrorResponse, "description": "认证尚未实现"}})
+# 注册登录路由集合
+router = APIRouter()
 # 认证服务的依赖类型别名，由当前应用提供，不表示请求已通过身份验证。
 AuthDep = Annotated[AuthService, Depends(get_auth_service)]
 
@@ -25,9 +25,6 @@ async def register(credentials: Credentials, service: AuthDep) -> AuthResponse:
 
     Returns:
         业务实现后返回注册令牌及公开用户信息；当前占位服务不会返回成功结果。
-
-    Raises:
-        CapabilityUnavailableError: 默认服务尚未实现注册，由统一处理器转换为 501。
     """
     return await service.register(credentials)
 
@@ -42,8 +39,5 @@ async def login(credentials: Credentials, service: AuthDep) -> AuthResponse:
 
     Returns:
         业务实现后返回登录令牌及公开用户信息；当前占位服务不会返回成功结果。
-
-    Raises:
-        CapabilityUnavailableError: 默认服务尚未实现登录，由统一处理器转换为 501。
     """
     return await service.login(credentials)

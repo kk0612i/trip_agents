@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import uvicorn
 from fastapi import FastAPI
 
 from app.api.deps import get_auth_service
@@ -69,3 +70,6 @@ def create_app(*, resources: AppResources | None = None,
 
 # Uvicorn 导入的默认 ASGI 应用；导入阶段只装配依赖，资源释放由 lifespan 管理。
 app = create_app()
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

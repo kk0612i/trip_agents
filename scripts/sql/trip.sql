@@ -5,7 +5,7 @@
 -- 应用数据库连接也必须使用 UTC 会话时区。
 
 SET time_zone = '+00:00';
-
+use trip_agents;
 CREATE TABLE app_user (
 	id VARCHAR(36) NOT NULL COMMENT '用户 UUID',
 	email VARCHAR(254) NOT NULL COMMENT '去首尾空白并转小写的邮箱',

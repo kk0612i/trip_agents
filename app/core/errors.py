@@ -16,3 +16,22 @@ class CapabilityUnavailableError(RuntimeError):
         # 未实现能力的业务名称，供入口日志及错误响应使用。
         self.capability = capability
         super().__init__(f"{capability}尚未实现")
+
+class BusinessError(Exception):
+    """预期内的业务失败。"""
+
+
+class EmailAlreadyRegisteredError(BusinessError):
+    pass
+
+
+class AccountNotFoundError(BusinessError):
+    pass
+
+
+class InvalidPasswordError(BusinessError):
+    pass
+
+
+class AuthenticationFailedError(BusinessError):
+    pass

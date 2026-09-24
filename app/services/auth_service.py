@@ -1,8 +1,12 @@
-"""数据库认证服务骨架；注册、登录和令牌校验尚未实现。"""
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import CapabilityUnavailableError
+from app.core.errors import EmailAlreadyRegisteredError, AccountNotFoundError, InvalidPasswordError, \
+    AuthenticationFailedError
+from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
+from app.models import AppUser
 from app.repository.auth_repository import UserRepository
 from app.schemas.auth_schema import AuthResponse, Credentials, UserView
 
@@ -30,11 +34,33 @@ class AuthService:
 
         Returns:
             实现后返回令牌及公开用户信息；当前占位实现不会返回。
-
-        Raises:
-            CapabilityUnavailableError: 注册业务尚未实现，当前始终抛出。
         """
-        raise CapabilityUnavailableError("用户注册")
+        async with self.session.begin():
+            query_user = await self.user_repo.find_by_email(credentials.email)
+            # 当前邮箱已注册
+            if query_user:
+                raise EmailAlreadyRegisteredError()
+
+            salt, password_hash = hash_password(password=credentials.password)
+            user_id = str(uuid4())
+            app_user = AppUser(
+                id=user_id,
+                email=credentials.email,
+                password_hash=password_hash,
+                password_salt=salt,
+                created_at=datetime.now(timezone.utc),
+            )
+            await self.user_repo.add(app_user)
+        token = create_access_token(
+            user_id=user_id
+        )
+        return AuthResponse(
+            access_token=token,
+            user=UserView(
+                id=user_id,
+                email=credentials.email
+            )
+        )
 
     async def login(self, credentials: Credentials) -> AuthResponse:
         """预留登录业务；当前不查询用户、校验密码或签发令牌。
@@ -46,9 +72,33 @@ class AuthService:
             实现后返回令牌及公开用户信息；当前占位实现不会返回。
 
         Raises:
-            CapabilityUnavailableError: 登录业务尚未实现，当前始终抛出。
+            stub_exc: stub
         """
-        raise CapabilityUnavailableError("用户登录")
+        email = credentials.email
+        password = credentials.password
+
+        app_user = await self.user_repo.find_by_email(email)
+        # 账号不存在
+        if not app_user:
+            raise AccountNotFoundError()
+
+        # 密码无效
+        if not verify_password(
+                password=password,
+                salt=app_user.password_salt,
+                expected_hash=app_user.password_hash
+        ):
+            raise InvalidPasswordError()
+
+        token = create_access_token(app_user.id)
+        return AuthResponse(
+            access_token=token,
+            user=UserView(
+                id=app_user.id,
+                email=email
+            )
+        )
+
 
     async def authenticate(self, token: str) -> UserView:
         """预留令牌校验及用户读取；当前不接受任何令牌。
@@ -60,7 +110,14 @@ class AuthService:
             实现后返回通过身份验证的公开用户信息；当前占位实现不会返回。
 
         Raises:
-            CapabilityUnavailableError: 身份认证尚未实现，当前始终抛出。
+            stub_exc: 身份认证尚未实现，当前始终抛出。
         """
-        # 认证未实现时必须明确拒绝，不能把客户端令牌内容直接当作可信身份。
-        raise CapabilityUnavailableError("身份认证")
+        user_id = decode_access_token(token)
+        # 身份验证失败
+        if not user_id:
+            raise AuthenticationFailedError()
+        user = await self.user_repo.find_by_id(user_id)
+        return UserView(
+            id=user_id,
+            email=user.email
+        )

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     log_enqueue: bool = True
     # 高德服务密钥；业务服务通过客户端注入取得能力。
     amap_api_key: str = Field(min_length=1)
+    # jwt密钥
+    auth_jwt_secret: str = Field(min_length=1)
+
     model_config = SettingsConfigDict(
         env_file=PROJECT_DIR / ".env",
         env_file_encoding="utf-8",

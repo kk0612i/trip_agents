@@ -3,7 +3,8 @@
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.core.errors import CapabilityUnavailableError
+from app.core.errors import CapabilityUnavailableError, EmailAlreadyRegisteredError, AccountNotFoundError, \
+    InvalidPasswordError, AuthenticationFailedError, BusinessError
 from app.core.log import log_event
 from app.schemas.api_schema import ErrorResponse, PublicError
 
@@ -54,3 +55,27 @@ def register_error_handlers(application: FastAPI) -> None:
                                  "message": "参数不符合接口约束"} for error in exc.errors()]},
         ))
         return JSONResponse(status_code=400 if invalid_json else 422, content=payload.model_dump(mode="json"))
+
+
+    # 注册业务异常
+    @application.exception_handler(BusinessError)
+    async def business_error(request: Request, exc: BusinessError) -> JSONResponse:
+        if isinstance(exc, EmailAlreadyRegisteredError):
+            status, code, message = 409, "EMAIL_ALREADY_REGISTERED", "该邮箱已注册"
+        elif isinstance(exc, (AccountNotFoundError, InvalidPasswordError)):
+            status, code, message = 401, "INVALID_CREDENTIALS", "邮箱或密码错误"
+        elif isinstance(exc, AuthenticationFailedError):
+            status, code, message = 401, "UNAUTHENTICATED", "身份认证失败"
+        else:
+            status, code, message = 500, "INTERNAL_ERROR", "服务暂时不可用"
+
+        payload = ErrorResponse(
+            request_id=request.state.request_id,
+            error=PublicError(code=code, message=message),
+        )
+        headers = {"WWW-Authenticate": "Bearer"} if status == 401 else None
+        return JSONResponse(
+            status_code=status,
+            content=payload.model_dump(mode="json"),
+            headers=headers,
+        )
